@@ -3,6 +3,14 @@
 
 // #define DEBUG
  
+/*
+
+
+
+*/
+
+
+
 PROGMEM const char* otaForm =
 	"<html lang='en'><head><meta charset='UTF-8'>"
 	"<meta name='viewport' content='width=device-width, initial-scale=1.5, maximum-scale=1.5, minimum-scale=1.5'>"
@@ -198,6 +206,7 @@ void  NetwEsp::startSTA(void)
 {	
 	// nextTimerMillis(ESP_WIFI_CONNECT_LOG_TIMER, 500);
 
+	WiFi.setSleepMode(WIFI_NONE_SLEEP);
 	WiFi.enableAP(false);
 	WiFi.mode(WIFI_STA);
 
@@ -207,7 +216,7 @@ void  NetwEsp::startSTA(void)
 			Serial.print("@"); Serial.print(millis()/1000) ; Serial.println(" Start wifiMulti");
 		#endif		
 
-		WiFi.setSleepMode(WIFI_NONE_SLEEP);
+		// WiFi.setSleepMode(WIFI_NONE_SLEEP);
 		wifiMulti.addAP(ssid1, pwd1);
 		wifiMulti.addAP(ssid2, pwd2);
 		// wifiMulti.run(15000);
@@ -303,6 +312,11 @@ void NetwEsp::localCmd(int cmd, long val)
 	}
 }
 
+void NetwEsp::disconnect(){
+
+	WiFi.disconnect();
+
+}
  
 void NetwEsp::loopEsp()  // TODO  server or client ???? call only when in parent mode
 {
@@ -311,7 +325,8 @@ void NetwEsp::loopEsp()  // TODO  server or client ???? call only when in parent
 	){
 		nextTimer(ESP_START_TIMER, 7);	
 		if(mode == WIFI_STA) startSTA(); 
-		if(mode == WIFI_AP) startAP();		
+		if(mode == WIFI_AP) startAP();
+		nextTimer(ESP_CLIENT_CONNECT_TIMER, 1);		
 	}
 
 
@@ -344,63 +359,63 @@ void NetwEsp::loopEsp()  // TODO  server or client ???? call only when in parent
 		return;  // no client connection needed
 	} 
 
+	if(ap16==0){
+		ap16 = ap();
+	} 
 
-	if( ! client.connected()) clientConnect();
 
 	if( client.connected()
 	){	
-		if( client.available() > 0){
+		nextTimer(ESP_CLIENT_CONNECT_TIMER, 3 );  //prevent stress
 
-			if(isReady(ESP_CLIENT_RESET_TIMER)){
-				resetConnCount = 0;
-				timerOff(ESP_CLIENT_RESET_TIMER);
+		if( client.available() > 0){
+		
+			#ifdef DEBUG
+				 Serial.print("@"); Serial.print(millis()/1000) ; Serial.print(" available:");Serial.println(client.available() );
+			#endif
+
+			while (client.available())
+			{
+				pushChar(client.read());
 			}
 
-			timerOff(ESP_CLIENT_CONNECT_TIMER);
-
-			nextTimer(ESP_CLIENT_ALIVE_TIMER, ESP_CLIENT_ALIVE_INTERVAL);
-			#ifdef DEBUG
-				// Serial.print("@"); Serial.print(millis()/1000) ; Serial.print(" available:");Serial.println(client.available() );
-			#endif
+			resetConnCount = 0;
+			nextTimer(ESP_CLIENT_RESET_TIMER, 8);
 		} 
-
-		if( isTime(ESP_CLIENT_ALIVE_TIMER) ){			
+		
+		if( isTime(ESP_CLIENT_RESET_TIMER) ){			
 			resetSocket();
 			return;
 		} 
 
-		while (client.available())
-		{
-			 pushChar(client.read());
-		}
-
 		findPayLoadRequest();  // check for input
 
-		NetwBase::loop();  // write from buffer
+		if(isReady(ESP_CLIENT_NEXTSEND_TIMER)
+		){
+			// nextTimerMillis(ESP_CLIENT_NEXTSEND_TIMER, 100);
+			// nextTimerMillis(ESP_CLIENT_NEXTSEND_TIMER, 3);
+			NetwBase::loop();  // write from buffer
+		}
 
-		if(uploadFunc!=0 ){
 
-			if(ap16==0){
-				ap16 = ap();
-			}
-
-			if( connectCount > 0
-			 && connectCountUploaded != connectCount
+		if( uploadFunc!=0 
+		 && isReady(ESP_CLIENT_NEXTSEND_TIMER)
+		){			
+			if(  connectCountUploaded != connectCount
+			 && connectCount != 1
 			){
 				uploadFunc(7, connectCount, millis() ); 
 				connectCountUploaded = connectCount;
-			} 	
 
-			if( resetConnCount > 1
-			 && resetConnCountUploaded != resetConnCount
+			} else 	if(  resetConnCountUploaded != resetConnCount
+			         &&  resetConnCount != 1
 			){
 				resetConnCountUploaded = resetConnCount;
-				uploadFunc(4, resetConnCountUploaded, millis() ); 
-			} 
-
-			if(ap16 != ap16Uploaded ){
-				uploadFunc(16, ap16, millis() ); 
-				ap16Uploaded = ap16;
+				uploadFunc(4, resetConnCount -1, millis() ); 
+				
+			} else if(ap16 != ap16Uploaded ){
+				// uploadFunc(16, ap16, millis() ); 
+				// ap16Uploaded = ap16;
 			}
 
 		}
@@ -410,10 +425,13 @@ void NetwEsp::loopEsp()  // TODO  server or client ???? call only when in parent
 			if( connectionLostUploaded != connectionLost
 			){
 				connectionLostUploaded = connectionLost;
-				errorFunc(7, 1000 + connectCountUploaded );
+				// errorFunc(7, 1000 + connectCountUploaded );
 			} 
 		}
+
 	}
+
+	if( ! client.connected()) clientConnect();
 }
  
 
@@ -425,11 +443,12 @@ bool NetwEsp::clientConnect()
 		return false;
 	}
 
-
+ 
 	connectCount++;
-	timerOff(ESP_CLIENT_CONNECT_TIMER);
-	// timerOff(ESP_CLIENT_ALIVE_TIMER);
-	nextTimer(ESP_CLIENT_ALIVE_TIMER, ESP_CLIENT_ALIVE_INTERVAL);
+ 
+	nextTimer(ESP_CLIENT_CONNECT_TIMER, 3 );   // prevent stress 
+
+	nextTimer(ESP_CLIENT_RESET_TIMER, ESP_CLIENT_ALIVE_INTERVAL);
 
 	if (client.connect(svc, port) ){
 
@@ -438,6 +457,9 @@ bool NetwEsp::clientConnect()
 		#endif		
 
 		client.println(upQueue);	// subscribe for iotOut/7
+
+		// nextTimerMillis(ESP_CLIENT_NEXTSEND_TIMER,250);
+		nextTimerMillis(ESP_CLIENT_NEXTSEND_TIMER,100);
 
 
 		return true;
@@ -457,30 +479,51 @@ bool NetwEsp::clientConnect()
 void NetwEsp::resetSocket()
 {		
 	resetConnCount++;
-	nextTimer(ESP_CLIENT_RESET_TIMER, 120);
-	
+	nextTimer(ESP_CLIENT_RESET_TIMER, resetConnCount * 3);	
+
+
 	bool rebootAllowed = true;
 	if(checkForReboot!=0){
 		rebootAllowed = checkForReboot();
 	}
 
-	if( resetConnCount<=3
-	|| ! rebootAllowed
+	if( resetConnCount < 3 
+	){
+		#ifdef DEBUG
+			Serial.print("@"); Serial.print(millis()/1000) ; Serial.println("-------Send D");
+		#endif
+
+		txCmd('D', nodeId, 5 );
+		// nextTimer(ESP_CLIENT_RESET_TIMER, 5);	
+		if (resetConnCount == 1) nextTimer(ESP_CLIENT_RESET_TIMER, 3);   
+		if (resetConnCount == 2) nextTimer(ESP_CLIENT_RESET_TIMER, 5);   
+ 
+
+	// } else if( resetConnCount < 6 ||
+	} else if(  
+			 ! rebootAllowed
 	){
 
 		#ifdef DEBUG
-			Serial.print("@"); Serial.print(millis()/1000) ; Serial.println(" stopAll");
+			Serial.print("@"); Serial.print(millis()/1000) ; Serial.println("------client.stopAll");
 		#endif
 
 		client.stopAll();
-		nextTimerMillis(ESP_CLIENT_CONNECT_TIMER, 500);
-		nextTimer(ESP_CLIENT_ALIVE_TIMER, ESP_CLIENT_ALIVE_INTERVAL);
+		nextTimer(ESP_CLIENT_CONNECT_TIMER, 1);
+		nextTimer(ESP_CLIENT_RESET_TIMER, 60); 
+		if (resetConnCount == 3) nextTimer(ESP_CLIENT_RESET_TIMER, 7);   
+		if (resetConnCount == 4) nextTimer(ESP_CLIENT_RESET_TIMER, 49);   
+		// if (resetConnCount == 5) nextTimer(ESP_CLIENT_RESET_TIMER, 120);   
+		// if (resetConnCount == 6) nextTimer(ESP_CLIENT_RESET_TIMER, 300);   
 
-	} else {
+	// } else {
 
-		ESP.wdtDisable(); 
-		ESP.restart();   //software boot
-		while(true){delay(1);} ;
+	// 	#ifdef DEBUG
+	// 		Serial.print("@"); Serial.print(millis()/1000) ; Serial.println("------------rstConn reboot");
+	// 	#endif
+	// 	ESP.wdtDisable(); 
+	// 	ESP.restart();   //software boot
+	// 	while(true){delay(1);} ;
 	}	 
 }
 
@@ -564,6 +607,7 @@ int ssid_len;
 // unsigned long lngSSID;
 
 	ssid_len =  WiFi.SSID().length();
+
 	// uint8 lastBssid = WiFi.BSSID()[5];
 	return WiFi.SSID()[ssid_len-1] 
 		| (WiFi.SSID()[ssid_len-2] << 8) 
@@ -702,7 +746,7 @@ void NetwEsp::trace(const char* id)
  
 	Serial.print(F(", reConn=")); Serial.print( connectCount   );
 	Serial.print(F(", resetCnt=")); Serial.print( resetConnCount   );
-	Serial.print(F("@")); Serial.print( timers[ESP_CLIENT_ALIVE_TIMER]/1000   );
+	Serial.print(F("@")); Serial.print( timers[ESP_CLIENT_RESET_TIMER]/1000   );
 	Serial.print(F(", up=")); Serial.print( String(upQueue)  );
 	Serial.print(F(", svc=")); Serial.print( String(svc)  );
 	Serial.print(F(":")); Serial.print( port  );

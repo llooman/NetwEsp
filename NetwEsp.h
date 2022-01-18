@@ -7,6 +7,13 @@
  *
  *  Photon (4.8), 2018-09 (4.9), 2018-12 (4.10), 2019-03 (4.11), 2019-06 (4.12)
  * 
+ * 
+ * 2022-01-09 refactor ESP_CLIENT_RESET_TIMER and 
+ * 			  - retry connection after 8 seconds by D(5), iotServer is keeping alive by freshing ping(5) every 7 secods.
+ *            - disable the reboot. test to see if nodes stay disconnected after wifi down. 
+ *            - when Wifi down for a long while keep retrying every minute.
+ * 			  refactor ESP_CLIENT_NEXTSEND_TIMER to unstress uploading after client connection	
+ * 
  * 2020-07-14 refactor to connect / timers: more robuust
  * */
 
@@ -28,13 +35,13 @@
 #include <ESP8266HTTPUpdateServer.h>
 
 #define ESP_TIMER_COUNT 5
+
 #define ESP_START_TIMER 0
 #define ESP_CLIENT_CONNECT_TIMER 1
-#define ESP_CLIENT_ALIVE_TIMER 2
-#define ESP_CLIENT_RESET_TIMER 3
-#define ESP_WIFI_CONNECT_LOG_TIMER 4
+#define ESP_CLIENT_RESET_TIMER 2
+#define ESP_WIFI_CONNECT_LOG_TIMER 3
+#define ESP_CLIENT_NEXTSEND_TIMER 4
  
-
 
 #define ESP_CLIENT_RECONNECT_DELAY 3
 #define ESP_CLIENT_ALIVE_INTERVAL 12
@@ -83,12 +90,12 @@ public:
 	bool 	startWebOnBoot=false;
 	bool 	startWifi=false;
 
-    int 	connectCount = -1;
-	int 	connectCountUploaded = 0;
+    int 	connectCount = 0;
+	int 	connectCountUploaded = -1;
 	int     connectionLost = 0;
-	int 	connectionLostUploaded = 0;
+	int 	connectionLostUploaded = -1;
     int 	resetConnCount = 0;
-	int 	resetConnCountUploaded = 0;
+	int 	resetConnCountUploaded = -1;
 
     bool  	connectioWasAlive = false;	
 
@@ -140,7 +147,7 @@ public:
 
 	void localCmd(int cmd, long val);
 	void loopEsp(void);
- 
+    void disconnect(void);
 
 	int write( RxData *rxData);
     void trace(const char* id);
